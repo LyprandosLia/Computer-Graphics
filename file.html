@@ -1,0 +1,231 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+<meta charset="UTF-8">
+
+<script src = "webgl-debug.js"></script>
+<script src = "gl-matrix-min.js"></script>
+
+
+<script id="vShader" type="x-shader/x-vertex">
+attribute vec4 aVertexPosition;
+attribute vec4 aVertexColor;
+uniform mat4 uVerticesTransform;
+varying vec4 vColor;
+
+void main() {
+  gl_Position = uVerticesTransform * aVertexPosition;
+  vColor = aVertexColor;
+}
+</script>
+
+<script id ="fShader" type = "x-shader/x-fragment">
+ precision mediump float; 
+varying vec4 vColor; 
+void main() {
+	gl_FragColor = vColor;
+}
+</script>
+
+<script>
+var gl; //accessing WebGL API
+var canvas; // DOM object that accepts the context
+var shadersProgram; //fregments shaders and vertexes
+var vertexPositionAttributePointer; //address of attribute aVertexPosition
+var vertexColorAttributePointer;
+var verticesTransformUniformPointer; 
+var vertexBuffer; //buffer for vertices
+var colorBuffer;
+var indexBuffer; // For indexed drawing
+var totalAngle = 0.0;
+var rotationXMatrix = new Float32Array(16);
+var requestID = 0 ;
+
+function createGLContext(inCanvas){ //Compiler of shaders
+    var outContext = null;
+    outContext = inCanvas.getContext("webgl"); //Creating WebGL context
+    if (!outContext)
+        outContext = inCanvas.getContext("experimental-webgl");
+    if (!outContext)
+        alert("WebGL rendering context creation error.");
+
+    return outContext;
+}
+
+function createCompileShader(shaderType, shaderSource){
+    //Creating and Compiling the given shader (handles compiling and compiling errors)
+    var outShader = gl.createShader(shaderType);
+    gl.shaderSource(outShader, shaderSource);
+    gl.compileShader(outShader);
+    if(!gl.getShaderParameter(outShader, gl.COMPILE_STATUS)){
+        alert("Shader compilation error");
+        gl.deleteShader(outShader);
+        outShader = null
+    }
+    return outShader
+}
+
+function initShaders(){
+    //Initializing vertexes by creating string with vertex shader and fragment shader
+    var vertexShaderSource = document.getElementById("vShader").textContent;
+    var fragmentShaderSource = document.getElementById("fShader").textContent;
+    var vertexShader = createCompileShader(gl.VERTEX_SHADER, vertexShaderSource);
+    //Creating objects
+    var fragmentShader = createCompileShader(gl.FRAGMENT_SHADER, fragmentShaderSource);
+    //Creating the program that contains the shaders
+    shadersProgram = gl.createProgram();
+    gl.attachShader(shadersProgram, vertexShader);
+    gl.attachShader(shadersProgram, fragmentShader);
+    gl.linkProgram(shadersProgram);
+    //Handling errors
+    if(!gl.getProgramParameter(shadersProgram, gl.LINK_STATUS)){
+        alert("Shaders linking error");
+    }
+    //Creating the runnable file
+    gl.useProgram(shadersProgram);
+    vertexPositionAttributePointer = gl.getAttribLocation(shadersProgram,"aVertexPosition");
+    gl.enableVertexAttribArray(vertexPositionAttributePointer);
+    vertexColorAttributePointer = gl.getAttribLocation(shadersProgram, "aVertexColor");
+    gl.enableVertexAttribArray(vertexColorAttributePointer);
+    verticesTransformUniformPointer = gl.getUniformLocation(shadersProgram, "uVerticesTransform");
+} 
+
+function initBuffers() {
+    // Cube vertices in 3D space (8 vertices)
+    var cubeVertices = new Float32Array([
+        // Front face
+        -0.2, -0.2,  0.2, 1.0,  // Vertex 0 (bottom-left-front)
+         0.2, -0.2,  0.2, 1.0,  // Vertex 1 (bottom-right-front)
+         0.2,  0.2,  0.2, 1.0,  // Vertex 2 (top-right-front)
+        -0.2,  0.2,  0.2, 1.0,  // Vertex 3 (top-left-front)
+        
+        // Back face
+        -0.2, -0.2, -0.2, 1.0,  // Vertex 4 (bottom-left-back)
+         0.2, -0.2, -0.2, 1.0,  // Vertex 5 (bottom-right-back)
+         0.2,  0.2, -0.2, 1.0,  // Vertex 6 (top-right-back)
+        -0.2,  0.2, -0.2, 1.0   // Vertex 7 (top-left-back)
+    ]);
+    vertexBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, cubeVertices, gl.STATIC_DRAW);
+    vertexBuffer.itemSize = 4;
+    vertexBuffer.itemCount = 8;
+
+    // Colors for 8 vertices
+    var cubeColors = new Float32Array([
+        // Front face colors
+        1.0, 0.0, 0.0, 1.0,  // Red (Vertex 0)
+        0.0, 1.0, 0.0, 1.0,  // Green (Vertex 1)
+        0.0, 0.0, 1.0, 1.0,  // Blue (Vertex 2)
+        1.0, 1.0, 0.0, 1.0,  // Yellow (Vertex 3)
+        
+        // Back face colors
+        1.0, 0.0, 1.0, 1.0,  // Magenta (Vertex 4)
+        0.0, 1.0, 1.0, 1.0,  // Cyan (Vertex 5)
+        0.5, 0.5, 0.5, 1.0,  // Gray (Vertex 6)
+        1.0, 0.5, 0.0, 1.0   // Orange (Vertex 7)
+    ]);
+    colorBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, cubeColors, gl.STATIC_DRAW);
+    colorBuffer.itemSize = 4;
+    colorBuffer.itemCount = 8;
+
+    // Index buffer for cube faces (12 triangles)
+    var indexMatrix = new Uint16Array([
+        // Front face
+        0, 1, 2,  0, 2, 3,
+        // Back face
+        4, 6, 5,  4, 7, 6,
+        // Top face
+        3, 2, 6,  3, 6, 7,
+        // Bottom face
+        4, 5, 1,  4, 1, 0,
+        // Right face
+        1, 5, 6,  1, 6, 2,
+        // Left face
+        4, 0, 3,  4, 3, 7
+    ]);
+    indexBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indexMatrix, gl.STATIC_DRAW);
+    indexBuffer.itemCount = 36;
+} 
+
+function drawScene() {
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+    gl.vertexAttribPointer(vertexPositionAttributePointer, vertexBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+    gl.vertexAttribPointer(vertexColorAttributePointer, colorBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+    // Calculate rotation angle
+    var txtStepAngle = document.getElementById("stepAngleTxt").value; 
+    var numStepAngle = parseFloat(txtStepAngle);
+    numStepAngle = numStepAngle*Math.PI/180.0; 
+    totalAngle += numStepAngle; 
+
+    // Create rotation matrix
+    glMatrix.mat4.fromXRotation(rotationXMatrix, totalAngle);
+    
+    // Create translation matrix (centered at origin)
+    var translationMatrix = new Float32Array(16);
+    var finalMatrix = new Float32Array(16);
+    glMatrix.mat4.fromTranslation(translationMatrix, [0, 0, 0]);
+    
+    // Combine rotation and translation
+    glMatrix.mat4.multiply(finalMatrix, translationMatrix, rotationXMatrix);
+    
+    // Set the transform uniform
+    gl.uniformMatrix4fv(verticesTransformUniformPointer, false, finalMatrix);
+    
+    // Draw the single cube
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+    gl.drawElements(gl.TRIANGLES, indexBuffer.itemCount, gl.UNSIGNED_SHORT, 0);
+}
+
+function main(){
+    minDimension = Math.min(window.innerHeight, window.innerWidth);
+    canvas = document.getElementById("sceneCanvas"); 
+    canvas.width = 0.9*minDimension; 
+    canvas.height = 0.9*minDimension; 
+    gl = WebGLDebugUtils.makeDebugContext(createGLContext(canvas));
+    initShaders(); 
+    initBuffers(); 
+    gl.clearColor(0.5, 0.5, 0.5, 1.0); 
+    gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    gl.enable(gl.DEPTH_TEST); 
+    drawScene(); 
+}
+
+function startAnimation() {
+    if (requestID == 0)
+        requestID = window.requestAnimationFrame(animationStep);
+}
+
+function animationStep() {
+    drawScene();
+    requestID = window.requestAnimationFrame(animationStep);
+}
+
+function stopAnimation() {
+    window.cancelAnimationFrame(requestID);
+    requestID = 0;
+} 
+
+</script>
+
+</head>
+
+<body onload="main()";>
+<canvas id="sceneCanvas"></canvas>
+<p>
+    Rotation angle step: <input type="text" id="stepAngleTxt" value="1" autocomplete="off"> 
+    <button id="startButton" onclick="startAnimation()">Start!</button>
+    <button id="stopButton" onclick="stopAnimation()">Stop!</button>
+</p>
+</body>
+
+</html>
