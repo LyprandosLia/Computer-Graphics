@@ -41,6 +41,7 @@ var totalAngle = 0.0;
 var rotationXMatrix = new Float32Array(16);
 var requestID = 0 ;
 
+
 function createGLContext(inCanvas){ //Compiler of shaders
     var outContext = null;
     outContext = inCanvas.getContext("webgl"); //Creating WebGL context
@@ -156,37 +157,67 @@ function drawScene() {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
-    gl.vertexAttribPointer(vertexPositionAttributePointer, vertexBuffer.itemSize, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribPointer(vertexPositionAttributePointer, 4, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(vertexPositionAttributePointer);
 
     gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
-    gl.vertexAttribPointer(vertexColorAttributePointer, colorBuffer.itemSize, gl.FLOAT, false, 0, 0);
-
-    // Calculate rotation angle
-    var txtStepAngle = document.getElementById("stepAngleTxt").value; 
-    var numStepAngle = parseFloat(txtStepAngle);
-    numStepAngle = numStepAngle*Math.PI/180.0; 
-    totalAngle += numStepAngle; 
-
-    // Create rotation matrix
+    gl.vertexAttribPointer(vertexColorAttributePointer, 4, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(vertexColorAttributePointer);
+    //Setting totalAngle to 0. 
+    
+    // Model rotation matrix
     glMatrix.mat4.fromXRotation(rotationXMatrix, totalAngle);
-    
-    // Create translation matrix (centered at origin)
-    var translationMatrix = new Float32Array(16);
-    var finalMatrix = new Float32Array(16);
-    glMatrix.mat4.fromTranslation(translationMatrix, [0, 0, 0]);
-    
-    // Combine rotation and translation
-    glMatrix.mat4.multiply(finalMatrix, translationMatrix, rotationXMatrix);
-    
-    // Set the transform uniform
+    var modelMatrix = glMatrix.mat4.create();
+    glMatrix.mat4.multiply(modelMatrix, modelMatrix, rotationXMatrix);
+
+    //Step 2 and 3
+    // View matrix (camera)
+    var distance = parseFloat(document.getElementById("camOrthoDistance").value);
+    if (isNaN(distance) || distance <= 0) distance = 3; // Έλεγχος για έγκυρη τιμή
+    var camPos = [distance, distance, distance]; //default
+
+    const selected = document.querySelector('input[name="cameraPos"]:checked');
+    if (selected){
+        let pos = selected.value;
+        camPos = [
+            pos[0] === 'L' ? -distance : distance, // X
+            pos[2] === 'T' ? distance : -distance, // Y
+            pos[1] === 'F' ? distance : -distance  // Z
+        ];
+    }
+    var viewMatrix = glMatrix.mat4.create();
+    glMatrix.mat4.lookAt(viewMatrix, camPos, [0, 0, 0], [0, 1, 0]); //setting the camera to 8,8,8 with center position
+    //The cube seems small . Change the camera view (8,8,8) to (3,3,3) so it can be seen closer.
+
+    // Projection matrix
+    var angleInput = parseFloat(document.getElementById("vAngle").value);
+    if (isNaN(angleInput) || angleInput <= 0) angleInput = 60;
+    var fov = angleInput * Math.PI / 180;
+
+    var projectionMatrix = glMatrix.mat4.create();
+    glMatrix.mat4.perspective(projectionMatrix,
+        fov,                // Field of view (in radians). Also the radian can be changed to 30 in order to see the cube closer.
+        1.0,                // Aspect ratio
+        0.001,              // Near plane
+        distance*10 // used to be 8000.0   due to Step 2 of the exercise :             // Far plane
+    );
+
+    // Final matrix = projection * view * model
+    var pvMatrix = glMatrix.mat4.create();
+    glMatrix.mat4.multiply(pvMatrix, projectionMatrix, viewMatrix);
+
+    var finalMatrix = glMatrix.mat4.create();
+    glMatrix.mat4.multiply(finalMatrix, pvMatrix, modelMatrix);
+
     gl.uniformMatrix4fv(verticesTransformUniformPointer, false, finalMatrix);
-    
-    // Draw the single cube
+
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
     gl.drawElements(gl.TRIANGLES, indexBuffer.itemCount, gl.UNSIGNED_SHORT, 0);
 }
 
+
 function main(){
+    
     minDimension = Math.min(window.innerHeight, window.innerWidth);
     canvas = document.getElementById("sceneCanvas"); 
     canvas.width = 0.9*minDimension; 
@@ -197,23 +228,19 @@ function main(){
     gl.clearColor(0.5, 0.5, 0.5, 1.0); 
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
     gl.enable(gl.DEPTH_TEST); 
-    drawScene(); 
-}
+    document.querySelectorAll('input[name="cameraPos"]').forEach(radio =>{
+        radio.addEventListener('change',drawScene);
+    })
 
-function startAnimation() {
-    if (requestID == 0)
-        requestID = window.requestAnimationFrame(animationStep);
-}
-
-function animationStep() {
+    document.getElementById("redrawButton").addEventListener("click", () => {
     drawScene();
-    requestID = window.requestAnimationFrame(animationStep);
+});
+
+    drawScene();
+    
 }
 
-function stopAnimation() {
-    window.cancelAnimationFrame(requestID);
-    requestID = 0;
-} 
+
 
 </script>
 
@@ -222,9 +249,46 @@ function stopAnimation() {
 <body onload="main()";>
 <canvas id="sceneCanvas"></canvas>
 <p>
-    Rotation angle step: <input type="text" id="stepAngleTxt" value="1" autocomplete="off"> 
-    <button id="startButton" onclick="startAnimation()">Start!</button>
-    <button id="stopButton" onclick="stopAnimation()">Stop!</button>
+     
+     <label for="vAngle">View Angle :</label>
+     <input type="text" id="vAngle" vAngle="vAngle"><br><br>
+     <label for="camOrthoDistance">Rectangular distance</label>
+     <input type="text" id="camOrthoDistance" camOrthoDistance = "camOrthoDistance"><br><br>
+      <!--Radio Buttons 
+        LFT = LEFT FRONT TOP
+        LFB = LEFT FRONT BOTTOM
+        LBT = LEFT BACK TOP 
+        LBB = LEFT BACK BOTTOM
+        RFT = RIGHT FRONT TOP
+        RFB =RIGHT FRONT BOTTOM
+        RBT = RIGHT BACK TOP
+        RBB = RIGHT BACK BOTTOM -->
+     <input type="radio" id="LFT" name="cameraPos" value="LFT">
+     <label for="LFT">Left-Front-Top</label><br>
+
+     <input type="radio" id="LFB" name="cameraPos" value="LFB">
+     <label for="LFB">Left-Front-Bottom</label><br>
+     
+    <input type="radio" id="LBT" name="cameraPos" value="LBT"> 
+    <label for="LBT">Left-Back-Top</label><br>
+
+    <input type="radio" id="LBB" name="cameraPos" value="LBB"> 
+    <label for="LBB">Left-Back-Bottom</label><br>
+
+    <input type="radio" id="RFT" name="cameraPos" value="RFT"> 
+    <label for="RFT">Right-Front-Top</label><br>
+
+    <input type="radio" id="RFB" name="cameraPos" value="RFB"> 
+    <label for="RFB">Right-Front-Bottom</label><br>
+
+    <input type="radio" id="RBT" name="cameraPos" value="RBT"> 
+    <label for="RBT">Right-Back-Top</label><br>
+
+    <input type="radio" id="RBB" name="cameraPos" value="RBB"> 
+    <label for="RBB">Right-Back-Bottom</label><br>
+     <br><br>
+   <button id="redrawButton">Redraw</button>
+    
 </p>
 </body>
 
