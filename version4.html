@@ -1,0 +1,826 @@
+<!DOCTYPE HTML>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+
+    <script src="webgl-debug.js"></script>
+    <script src="gl-matrix-min.js"></script>
+
+    <!-- Vertex Shader -->
+    <script id="vShader" type="x-shader/x-vertex">
+        attribute vec4 aVertexPosition;
+        attribute vec2 aTexCoord;
+        uniform mat4 uVerticesTransform;
+        varying vec2 vTexCoord;
+        void main() {
+          gl_Position = uVerticesTransform * aVertexPosition;
+          vTexCoord = aTexCoord;
+        }
+    </script>
+
+    <!-- Fragment Shader -->
+    <script id="fShader" type="x-shader/x-fragment">
+        precision mediump float;
+        uniform sampler2D uSampler;
+        varying vec2 vTexCoord;
+        void main() {
+            gl_FragColor = texture2D(uSampler, vTexCoord);
+        }
+    </script>
+
+    <script>
+        var gl;
+        var canvas;
+        var shadersProgram;
+        var vertexPositionAttributePointer;
+        var vertexColorAttributePointer;
+        var verticesTransformUniformPointer;
+        var vertexBuffer;
+        var colorBuffer;
+        var indexBuffer;
+        var texCoordBuffer;
+        var metalTexture, faceTexture;
+        var skyboxTexture, floorTexture;
+
+        let texturesLoaded = 0;
+        var totalAngle = 0.0;
+        var rotationXMatrix = new Float32Array(16);
+        var requestID = 0;
+        var projectionMatrix = glMatrix.mat4.create();
+        var viewMatrix = glMatrix.mat4.create();
+        var animationOn = false;
+        var cameraAngle = 0;
+
+        //Initializing variables for moving the camera with mouse
+
+        var mouseDown = false;
+        var lastMouseX = null;
+        var lastMouseY = null;
+        var deltaMouseX = null;
+        var deltaMouseY = null;
+        var deltaFresh = false;
+        var wheelRadiusFactor = 1.0;
+        var rect;
+
+        //Initiliazing variables for moving each body part
+
+        var rightArmAngle = 0;
+        var leftArmAngle = 0;
+        var headAngle = 0;
+        var rightLegAngle = 0;
+        var leftLegAngle = 0;
+
+        // WebGL context creation
+        function createGLContext(inCanvas) {
+            var outContext = inCanvas.getContext("webgl") || inCanvas.getContext("experimental-webgl");
+            if (!outContext) alert("WebGL rendering context creation error.");
+            return outContext;
+        }
+
+        // Compile shader
+        function createCompileShader(shaderType, shaderSource) {
+            var outShader = gl.createShader(shaderType);
+            gl.shaderSource(outShader, shaderSource);
+            gl.compileShader(outShader);
+            if (!gl.getShaderParameter(outShader, gl.COMPILE_STATUS)) {
+                alert("Shader compilation error");
+                gl.deleteShader(outShader);
+                return null;
+            }
+            return outShader;
+        }
+
+        // Initialize shaders
+        function initShaders() {
+            var vertexShaderSource = document.getElementById("vShader").textContent;
+            var fragmentShaderSource = document.getElementById("fShader").textContent;
+            var vertexShader = createCompileShader(gl.VERTEX_SHADER, vertexShaderSource);
+            var fragmentShader = createCompileShader(gl.FRAGMENT_SHADER, fragmentShaderSource);
+
+            shadersProgram = gl.createProgram();
+            gl.attachShader(shadersProgram, vertexShader);
+            gl.attachShader(shadersProgram, fragmentShader);
+            gl.linkProgram(shadersProgram);
+            if (!gl.getProgramParameter(shadersProgram, gl.LINK_STATUS)) {
+                alert("Shaders linking error");
+            }
+            gl.useProgram(shadersProgram);
+
+            texCoordAttributePointer = gl.getAttribLocation(shadersProgram, "aTexCoord");
+            gl.enableVertexAttribArray(texCoordAttributePointer);
+            vertexPositionAttributePointer = gl.getAttribLocation(shadersProgram, "aVertexPosition");
+            gl.enableVertexAttribArray(vertexPositionAttributePointer);
+            verticesTransformUniformPointer = gl.getUniformLocation(shadersProgram, "uVerticesTransform");
+        }
+
+        // Initialize buffers
+
+        function initBuffers() {
+            // Cube vertices in 3D space (8 vertices)
+            var cubeVertices = new Float32Array([
+                // Front face
+                -0.2, -0.2, 0.2, 1.0,  // Vertex 0 (bottom-left-front)
+                0.2, -0.2, 0.2, 1.0,  // Vertex 1 (bottom-right-front)
+                0.2, 0.2, 0.2, 1.0,  // Vertex 2 (top-right-front)
+                -0.2, 0.2, 0.2, 1.0,  // Vertex 3 (top-left-front)
+
+                // Back face
+                -0.2, -0.2, -0.2, 1.0,  // Vertex 4 (bottom-left-back)
+                0.2, -0.2, -0.2, 1.0,  // Vertex 5 (bottom-right-back)
+                0.2, 0.2, -0.2, 1.0,  // Vertex 6 (top-right-back)
+                -0.2, 0.2, -0.2, 1.0   // Vertex 7 (top-left-back)
+            ]);
+            vertexBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, cubeVertices, gl.STATIC_DRAW);
+            vertexBuffer.itemSize = 4;
+            vertexBuffer.itemCount = 8;
+
+            // Index buffer for cube faces (12 triangles)
+            var indexMatrix = new Uint16Array([
+                // Front face
+                0, 1, 2, 0, 2, 3,
+                // Back face
+                4, 6, 5, 4, 7, 6,
+                // Top face
+                3, 2, 6, 3, 6, 7,
+                // Bottom face
+                4, 5, 1, 4, 1, 0,
+                // Right face
+                1, 5, 6, 1, 6, 2,
+                // Left face
+                4, 0, 3, 4, 3, 7
+            ]);
+            indexBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indexMatrix, gl.STATIC_DRAW);
+            indexBuffer.itemCount = 36;
+
+            // Texture coordinates for the 8 unique vertices
+            var texCoords = new Float32Array([
+                // Vertices 0–3: Front face (0,1,2,3)
+                0.0, 0.0,  // Vertex 0
+                1.0, 0.0,  // Vertex 1
+                1.0, 1.0,  // Vertex 2
+                0.0, 1.0,  // Vertex 3
+
+                // Vertices 4–7: Back face (4,5,6,7)
+                0.0, 0.0,  // Vertex 4
+                1.0, 0.0,  // Vertex 5
+                1.0, 1.0,  // Vertex 6
+                0.0, 1.0   // Vertex 7
+            ]);
+            texCoordBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW);
+            texCoordBuffer.itemSize = 2;
+            texCoordBuffer.itemCount = 8;
+        }
+
+        function initHeadBuffers() {
+            const headVertices = new Float32Array([
+                // Front face (eyes)
+                -0.2, -0.2, 0.2, 1.0,
+                0.2, -0.2, 0.2, 1.0,
+                0.2, 0.2, 0.2, 1.0,
+                -0.2, 0.2, 0.2, 1.0,
+
+                // Right face (ear)
+                0.2, -0.2, 0.2, 1.0,
+                0.2, -0.2, -0.2, 1.0,
+                0.2, 0.2, -0.2, 1.0,
+                0.2, 0.2, 0.2, 1.0,
+
+                // Left face (ear)
+                -0.2, -0.2, -0.2, 1.0,
+                -0.2, -0.2, 0.2, 1.0,
+                -0.2, 0.2, 0.2, 1.0,
+                -0.2, 0.2, -0.2, 1.0,
+
+                // Top face
+                -0.2, 0.2, 0.2, 1.0,
+                0.2, 0.2, 0.2, 1.0,
+                0.2, 0.2, -0.2, 1.0,
+                -0.2, 0.2, -0.2, 1.0,
+
+                // Back face
+                -0.2, -0.2, -0.2, 1.0,
+                0.2, -0.2, -0.2, 1.0,
+                0.2, 0.2, -0.2, 1.0,
+                -0.2, 0.2, -0.2, 1.0,
+            ]);
+            headVertexBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, headVertexBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, headVertices, gl.STATIC_DRAW);
+            headVertexBuffer.itemSize = 4;
+            headVertexBuffer.itemCount = 20;
+
+            // Assuming face image: 900x900 px
+            var texCoords = new Float32Array([
+                // Front face (robot face) (300x300 middle down in image)
+                0.3333, 0.0,
+                0.6666, 0.0,
+                0.6666, 0.3333,
+                0.3333, 0.3333,
+
+                // Left face (left ear) (300x300 right down in image)
+                0.6666, 0.0,
+                1.0, 0.0,
+                1.0, 0.3333,
+                0.6666, 0.3333,
+
+                // Right face (right ear) (300x300 left down in image)
+                0.0, 0.0,
+                0.3333, 0.0,
+                0.3333, 0.3333,
+                0.0, 0.3333,
+
+                // Top face (top of head) (300x300 middle in image)
+                0.3333, 0.3333,
+                0.6666, 0.3333,
+                0.6666, 0.6666,
+                0.3333, 0.6666,
+
+                // Back face (back of head) (300x300 middle up in image)
+                0.3333, 0.6666,
+                0.6666, 0.6666,
+                0.6666, 1.0,
+                0.3333, 1.0
+            ]);
+            headTexCoordBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, headTexCoordBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW);
+            headTexCoordBuffer.itemSize = 2;
+            headTexCoordBuffer.itemCount = 20;
+
+            const headIndices = new Uint16Array([
+                // Front face
+                0, 1, 2, 0, 2, 3,
+                // Right face
+                4, 5, 6, 4, 6, 7,
+                // Left face
+                8, 9, 10, 8, 10, 11,
+                // Top face
+                12, 13, 14, 12, 14, 15,
+                // Back face
+                16, 17, 18, 16, 18, 19
+            ]);
+            headIndexBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, headIndexBuffer);
+            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, headIndices, gl.STATIC_DRAW);
+            headIndexBuffer.itemCount = 30;
+        }
+
+        function initSkyboxBuffers() {
+            var size = 1000;
+
+            var skyboxVertices = new Float32Array([
+                // Front face
+                -size, -size, size, 1.0,
+                size, -size, size, 1.0,
+                size, size, size, 1.0,
+                -size, size, size, 1.0,
+
+                // Back face
+                size, -size, -size, 1.0,
+                -size, -size, -size, 1.0,
+                -size, size, -size, 1.0,
+                size, size, -size, 1.0,
+
+                // Top face
+                -size, size, size, 1.0,
+                size, size, size, 1.0,
+                size, size, -size, 1.0,
+                -size, size, -size, 1.0,
+
+                // Bottom face
+                -size, -size, -size, 1.0,
+                size, -size, -size, 1.0,
+                size, -size, size, 1.0,
+                -size, -size, size, 1.0,
+
+                // Right face
+                size, -size, size, 1.0,
+                size, -size, -size, 1.0,
+                size, size, -size, 1.0,
+                size, size, size, 1.0,
+
+                // Left face
+                -size, -size, -size, 1.0,
+                -size, -size, size, 1.0,
+                -size, size, size, 1.0,
+                -size, size, -size, 1.0
+            ]);
+            skyboxVertexBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, skyboxVertexBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, skyboxVertices, gl.STATIC_DRAW);
+            skyboxVertexBuffer.itemSize = 4;
+            skyboxVertexBuffer.itemCount = 24;
+
+            var skyboxIndices = new Uint16Array([
+                0, 1, 2, 0, 2, 3,       // Front
+                4, 5, 6, 4, 6, 7,       // Back
+                8, 9, 10, 8, 10, 11,       // Top
+                12, 13, 14, 12, 14, 15,       // Bottom
+                16, 17, 18, 16, 18, 19,       // Right
+                20, 21, 22, 20, 22, 23        // Left
+            ]);
+            skyboxIndexBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, skyboxIndexBuffer);
+            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, skyboxIndices, gl.STATIC_DRAW);
+            skyboxIndexBuffer.itemCount = 36;
+
+            var skyboxTexCoords = new Float32Array([
+                // FRONT (στο (1,1))
+                0.25, 0.666, 0.5, 0.666, 0.5, 0.333, 0.25, 0.333,
+                // BACK (στο (3,1))
+                0.75, 0.666, 1.0, 0.666, 1.0, 0.333, 0.75, 0.333,
+                // TOP (στο (1,0))
+                0.25, 1.0, 0.5, 1.0, 0.5, 0.666, 0.25, 0.666,
+                // BOTTOM (στο (1,2))
+                0.25, 0.333, 0.5, 0.333, 0.5, 0.0, 0.25, 0.0,
+                // RIGHT (στο (2,1))
+                0.5, 0.666, 0.75, 0.666, 0.75, 0.333, 0.5, 0.333,
+                // LEFT (στο (0,1))
+                0.0, 0.666, 0.25, 0.666, 0.25, 0.333, 0.0, 0.333
+            ]);
+            skyboxTexCoordBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, skyboxTexCoordBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, skyboxTexCoords, gl.STATIC_DRAW);
+            skyboxTexCoordBuffer.itemSize = 2;
+            skyboxTexCoordBuffer.itemCount = 24;
+        }
+
+        function initFloorBuffers() {
+            const halfSize = 0.5;  // smaller unit size
+
+            const floorVertices = new Float32Array([
+                -halfSize, 0.0, halfSize, 1.0,  // bottom-left
+                halfSize, 0.0, halfSize, 1.0,  // bottom-right
+                halfSize, 0.0, -halfSize, 1.0,  // top-right
+                -halfSize, 0.0, -halfSize, 1.0   // top-left
+            ]);
+            floorVertexBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, floorVertexBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, floorVertices, gl.STATIC_DRAW);
+            floorVertexBuffer.itemSize = 4;
+            floorVertexBuffer.itemCount = 4;
+
+            const floorTexCoords = new Float32Array([
+                0.0, 0.0,
+                1.0, 0.0,
+                1.0, 1.0,
+                0.0, 1.0
+            ]);
+            floorTexCoordBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, floorTexCoordBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, floorTexCoords, gl.STATIC_DRAW);
+            floorTexCoordBuffer.itemSize = 2;
+            floorTexCoordBuffer.itemCount = 4;
+
+            const floorIndices = new Uint16Array([
+                0, 1, 2,
+                0, 2, 3
+            ]);
+            floorIndexBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, floorIndexBuffer);
+            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, floorIndices, gl.STATIC_DRAW);
+            floorIndexBuffer.itemCount = 6;
+        }
+
+        // Drawing
+
+        // Draw cube with given model matrix and color
+        function drawCube(modelMatrix, texture) {
+            // Compute transformation matrix
+            var finalMatrix = glMatrix.mat4.create();
+            var pvMatrix = glMatrix.mat4.create();
+            glMatrix.mat4.multiply(pvMatrix, projectionMatrix, viewMatrix);
+            glMatrix.mat4.multiply(finalMatrix, pvMatrix, modelMatrix);
+            gl.uniformMatrix4fv(verticesTransformUniformPointer, false, finalMatrix);
+
+            // Bind texture
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            gl.uniform1i(gl.getUniformLocation(shadersProgram, "uSampler"), 0);
+
+            // Bind vertex positions
+            gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+            gl.vertexAttribPointer(vertexPositionAttributePointer, 4, gl.FLOAT, false, 0, 0);
+
+            // Bind texture coordinates
+            gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+            gl.vertexAttribPointer(texCoordAttributePointer, 2, gl.FLOAT, false, 0, 0);
+
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+            gl.drawElements(gl.TRIANGLES, indexBuffer.itemCount, gl.UNSIGNED_SHORT, 0);
+        }
+
+        // Draw head cube (face) with given model matrix and texture
+        function drawHeadCube(modelMatrix, texture) {
+            let finalMatrix = glMatrix.mat4.create();
+            let pvMatrix = glMatrix.mat4.create();
+            glMatrix.mat4.multiply(pvMatrix, projectionMatrix, viewMatrix);
+            glMatrix.mat4.multiply(finalMatrix, pvMatrix, modelMatrix);
+            gl.uniformMatrix4fv(verticesTransformUniformPointer, false, finalMatrix);
+
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            gl.uniform1i(gl.getUniformLocation(shadersProgram, "uSampler"), 0);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, headVertexBuffer);
+            gl.enableVertexAttribArray(vertexPositionAttributePointer);
+            gl.vertexAttribPointer(vertexPositionAttributePointer, 4, gl.FLOAT, false, 0, 0);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, headTexCoordBuffer);
+            gl.enableVertexAttribArray(texCoordAttributePointer);
+            gl.vertexAttribPointer(texCoordAttributePointer, 2, gl.FLOAT, false, 0, 0);
+
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, headIndexBuffer);
+            gl.drawElements(gl.TRIANGLES, headIndexBuffer.itemCount, gl.UNSIGNED_SHORT, 0);
+        }
+
+        function drawSkybox() {
+            var modelMatrix = glMatrix.mat4.create(); // identity matrix for model
+            var pvMatrix = glMatrix.mat4.create();
+            var finalMatrix = glMatrix.mat4.create();
+
+            // Remove translation from view matrix so skybox stays centered on camera
+            var viewNoTranslation = glMatrix.mat4.clone(viewMatrix);
+            viewNoTranslation[12] = 0;
+            viewNoTranslation[13] = 0;
+            viewNoTranslation[14] = 0;
+
+            // projection * viewNoTranslation
+            glMatrix.mat4.multiply(pvMatrix, projectionMatrix, viewNoTranslation);
+
+            // final = pvMatrix * modelMatrix
+            glMatrix.mat4.multiply(finalMatrix, pvMatrix, modelMatrix);
+
+            // Send combined matrix to shader uniform
+            gl.uniformMatrix4fv(verticesTransformUniformPointer, false, finalMatrix);
+
+            // Bind texture
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, skyboxTexture);
+            gl.uniform1i(gl.getUniformLocation(shadersProgram, "uSampler"), 0);
+
+            // Bind vertex buffer and setup attribute
+            gl.bindBuffer(gl.ARRAY_BUFFER, skyboxVertexBuffer);
+            gl.enableVertexAttribArray(vertexPositionAttributePointer);
+            gl.vertexAttribPointer(vertexPositionAttributePointer, 4, gl.FLOAT, false, 0, 0);
+
+            // Bind texture coordinate buffer and setup attribute
+            gl.bindBuffer(gl.ARRAY_BUFFER, skyboxTexCoordBuffer);
+            gl.enableVertexAttribArray(texCoordAttributePointer);
+            gl.vertexAttribPointer(texCoordAttributePointer, 2, gl.FLOAT, false, 0, 0);
+
+            // Bind index buffer and draw
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, skyboxIndexBuffer);
+            gl.drawElements(gl.TRIANGLES, skyboxIndexBuffer.itemCount, gl.UNSIGNED_SHORT, 0);
+        }
+
+        function drawFloor() {
+            gl.depthFunc(gl.LESS);
+
+            var modelMatrix = glMatrix.mat4.create();
+
+            // Κάνουμε πρώτα scale
+            glMatrix.mat4.scale(modelMatrix, modelMatrix, [2, 1, 2]);
+
+            // Τώρα μετατόπιση προς τα κάτω κατά π.χ. 1.0 μονάδες (προσαρμόζεις όπως χρειάζεται)
+            glMatrix.mat4.translate(modelMatrix, modelMatrix, [0, -0.6, 0]);
+
+            var pvMatrix = glMatrix.mat4.create();
+            glMatrix.mat4.multiply(pvMatrix, projectionMatrix, viewMatrix);
+
+            var mvpMatrix = glMatrix.mat4.create();
+            glMatrix.mat4.multiply(mvpMatrix, pvMatrix, modelMatrix);
+
+            gl.uniformMatrix4fv(verticesTransformUniformPointer, false, mvpMatrix);
+
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, floorTexture);
+            gl.uniform1i(gl.getUniformLocation(shadersProgram, "uSampler"), 0);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, floorVertexBuffer);
+            gl.enableVertexAttribArray(vertexPositionAttributePointer);
+            gl.vertexAttribPointer(vertexPositionAttributePointer, 4, gl.FLOAT, false, 0, 0);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, floorTexCoordBuffer);
+            gl.enableVertexAttribArray(texCoordAttributePointer);
+            gl.vertexAttribPointer(texCoordAttributePointer, 2, gl.FLOAT, false, 0, 0);
+
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, floorIndexBuffer);
+            gl.drawElements(gl.TRIANGLES, floorIndexBuffer.itemCount, gl.UNSIGNED_SHORT, 0);
+        }
+
+        // Draw entire scene
+        function drawScene() {
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+            var distance = parseFloat(document.getElementById("camOrthoDistance").value);
+            if (isNaN(distance) || distance <= 0) distance = 3;
+
+            var camPos;
+            if (animationOn) {
+                cameraAngle += 0.01;
+                let camX = distance * Math.sin(cameraAngle);
+                let camZ = distance * Math.cos(cameraAngle);
+                let camY = distance * 0.3 + Math.sin(cameraAngle * 2) * 0.2;
+                camPos = [camX, camY, camZ];
+            } else {
+                //Handling the camera with mouse
+                let angleX = deltaMouseX * 0.01;
+                let angleY = deltaMouseY * 0.01;
+
+                let radius = distance * wheelRadiusFactor;
+
+                let camX = radius * Math.sin(angleX) * Math.cos(angleY);
+                let camZ = radius * Math.cos(angleX) * Math.cos(angleY);
+                let camY = radius * Math.sin(angleY);
+
+                camPos = [camX, camY, camZ];
+            }
+
+            glMatrix.mat4.lookAt(viewMatrix, camPos, [0, 0, 0], [0, 1, 0]);
+
+            var angleInput = parseFloat(document.getElementById("vAngle").value);
+            if (isNaN(angleInput) || angleInput <= 0) angleInput = 60;
+            var fov = angleInput * Math.PI / 180;
+            var near = 0.1;
+            var far = 2000.0; // large enough for skybox size 1000
+            glMatrix.mat4.perspective(projectionMatrix, fov, 1.0, near, far);
+
+            // skybox
+
+            gl.depthFunc(gl.LEQUAL);
+            gl.disable(gl.CULL_FACE);
+            drawSkybox();
+
+            // floor
+
+            gl.enable(gl.CULL_FACE);
+            gl.depthFunc(gl.LESS);
+            drawFloor();
+
+            // robot body parts
+
+            glMatrix.mat4.fromXRotation(rotationXMatrix, totalAngle);
+            var baseModelMatrix = glMatrix.mat4.clone(rotationXMatrix);
+            var robotMatrix = glMatrix.mat4.clone(baseModelMatrix);
+
+            var body = glMatrix.mat4.clone(robotMatrix);
+            glMatrix.mat4.translate(body, body, [0, 0.0, 0]);
+            glMatrix.mat4.scale(body, body, [0.8, 1.2, 0.2]);
+            drawCube(body, metalTexture);
+
+            var rightArm = glMatrix.mat4.clone(robotMatrix);
+            glMatrix.mat4.translate(rightArm, rightArm, [0.2, 0.06, 0]);
+            glMatrix.mat4.rotateX(rightArm, rightArm, rightArmAngle);
+            glMatrix.mat4.scale(rightArm, rightArm, [0.2, 0.8, 0.2]);
+            drawCube(rightArm, metalTexture);
+
+            
+            var leftArm = glMatrix.mat4.clone(robotMatrix);
+            glMatrix.mat4.translate(leftArm, leftArm, [-0.2, 0.06, 0]);
+            glMatrix.mat4.rotateX(leftArm, leftArm, leftArmAngle);
+            glMatrix.mat4.scale(leftArm, leftArm, [0.2, 0.8, 0.2]);
+            drawCube(leftArm, metalTexture);
+
+            
+            var head = glMatrix.mat4.clone(robotMatrix);
+            glMatrix.mat4.translate(head, head, [0, 0.32, 0]);
+            glMatrix.mat4.rotateX(head, head, headAngle);
+            glMatrix.mat4.scale(head, head, [0.4, 0.4, 0.4]);
+            drawHeadCube(head, faceTexture);
+
+            
+            var rightLeg = glMatrix.mat4.clone(robotMatrix);
+            glMatrix.mat4.translate(rightLeg, rightLeg, [0.1, -0.4, 0]);
+            glMatrix.mat4.rotateX(rightLeg, rightLeg, rightLegAngle);
+            glMatrix.mat4.scale(rightLeg, rightLeg, [0.25, 0.8, 0.3]);
+            drawCube(rightLeg, metalTexture);
+
+            
+            var leftLeg = glMatrix.mat4.clone(robotMatrix);
+            glMatrix.mat4.translate(leftLeg, leftLeg, [-0.1, -0.4, 0]);
+            glMatrix.mat4.rotateX(leftLeg, leftLeg, leftLegAngle);
+            glMatrix.mat4.scale(leftLeg, leftLeg, [0.25, 0.8, 0.3]);
+            drawCube(leftLeg, metalTexture);
+
+            var leftFoot = glMatrix.mat4.clone(robotMatrix);
+            glMatrix.mat4.translate(leftFoot, leftFoot, [-0.1, -0.6, 0]);
+            glMatrix.mat4.scale(leftFoot, leftFoot, [0.25, 0.2, 0.4]);
+            drawCube(leftFoot, metalTexture);
+
+            var rightFoot = glMatrix.mat4.clone(robotMatrix);
+            glMatrix.mat4.translate(rightFoot, rightFoot, [0.1, -0.6, 0]);
+            glMatrix.mat4.scale(rightFoot, rightFoot, [0.25, 0.2, 0.4]);
+            drawCube(rightFoot, metalTexture);
+
+            if (animationOn) {
+                requestAnimationFrame(drawScene);
+            }
+        }
+
+        function isPowerOfTwo(value) {
+            return (value & (value - 1)) === 0;
+        }
+
+        function loadTexture(imageSrc, onLoadCallback) {
+            const texture = gl.createTexture();
+            const image = new Image();
+
+            image.onload = function () {
+                gl.bindTexture(gl.TEXTURE_2D, texture);
+                gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA,
+                    gl.RGBA, gl.UNSIGNED_BYTE, image);
+
+                if (isPowerOfTwo(image.width) && isPowerOfTwo(image.height)) {
+                    gl.generateMipmap(gl.TEXTURE_2D);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                } else {
+                    // If image pixels are not power-of-two, use linear without mipmaps
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+                    // We disable texture (wrapping) for textures
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                }
+
+                gl.bindTexture(gl.TEXTURE_2D, null);
+
+                if (onLoadCallback) onLoadCallback();
+            };
+
+            image.onerror = function () {
+                console.error("Failed to load image: " + imageSrc);
+            };
+
+            image.src = imageSrc;
+            return texture;
+        }
+
+        function handleMouseDown(event) {
+            mouseDown = true;
+            lastMouseX = event.clientX - rect.left;
+            lastMouseY = rect.bottom - event.clientY;
+            deltaMouseX = 0;
+            deltaMouseY = 0;
+            deltaFresh = true;
+        }
+
+        function handleMouseUp(event) {
+            mouseDown = false;
+        }
+
+        function handleMouseMove(event) {
+            let currMouseX = event.clientX - rect.left;
+            let currMouseY = rect.bottom - event.clientY;
+            if (mouseDown) {
+                deltaMouseX -= currMouseX - lastMouseX;
+                deltaMouseY += currMouseY - lastMouseY;
+                deltaFresh = true;
+
+                if (!animationOn) {
+                    drawScene();
+                }
+            }
+
+            lastMouseX = currMouseX;
+            lastMouseY = currMouseY;
+        }
+
+        function handleMouseWheel(event) {
+            event.preventDefault();
+            const stepArm = 5 * Math.PI / 180;
+            const stepHeadLeg = 2.5 * Math.PI / 180;
+
+
+            const selectedPart = document.querySelector('input[name="bodyPart"]:checked').value;
+
+
+            let delta = event.deltaY > 0 ? -1 : 1;
+
+            switch (selectedPart) {
+                case 'rightArm':
+                    rightArmAngle = clamp(rightArmAngle + delta * stepArm, 0, Math.PI);
+                    break;
+                case 'leftArm':
+                    leftArmAngle = clamp(leftArmAngle + delta * stepArm, 0, Math.PI);
+                    break;
+                case 'head':
+                    headAngle = clamp(headAngle + delta * stepHeadLeg, 0, Math.PI / 2);
+                    break;
+                case 'rightLeg':
+                    rightLegAngle = clamp(rightLegAngle + delta * stepHeadLeg, 0, Math.PI / 2);
+                    break;
+                case 'leftLeg':
+                    leftLegAngle = clamp(leftLegAngle + delta * stepHeadLeg, 0, Math.PI / 2);
+                    break;
+            }
+
+            drawScene();
+        }
+
+        function clamp(value, min, max) {
+            return Math.min(Math.max(value, min), max);
+        }
+        // Main initialization
+        function main() {
+            minDimension = Math.min(window.innerHeight, window.innerWidth);
+            canvas = document.getElementById("sceneCanvas");
+            canvas.width = Math.floor(0.9 * minDimension);
+            canvas.height = Math.floor(0.9 * minDimension);
+            gl = WebGLDebugUtils.makeDebugContext(createGLContext(canvas));
+
+            // initializers
+            initShaders();
+            initBuffers();
+            initHeadBuffers();
+            initSkyboxBuffers();
+            initFloorBuffers();
+
+            gl.clearColor(0.5, 0.5, 0.5, 1.0);
+            gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+            gl.enable(gl.DEPTH_TEST);
+
+            let texturesLoaded = 0;
+            metalTexture = loadTexture("../textures/metal.png", () => {
+                texturesLoaded++;
+                if (texturesLoaded === 4) drawScene();
+            });
+
+            faceTexture = loadTexture("../textures/face_of_robot.png", () => {
+                texturesLoaded++;
+                if (texturesLoaded === 4) drawScene();
+            });
+
+            skyboxTexture = loadTexture("../textures/skybox.png", () => {
+                texturesLoaded++;
+                if (texturesLoaded === 4) drawScene();
+            });
+
+            floorTexture = loadTexture("../textures/floor_with_names_and_AM.png", () => {
+                texturesLoaded++;
+                if (texturesLoaded === 4) drawScene();
+            });
+
+            document.querySelectorAll('input[name="cameraPos"]').forEach(r => {
+                r.addEventListener('change', drawScene);
+            });
+
+            document.getElementById("startBtn").addEventListener("click", () => {
+                animationOn = true;
+                drawScene();
+            });
+            document.getElementById("pauseBtn").addEventListener("click", () => {
+                animationOn = false;
+            });
+
+            canvas.onmousedown = handleMouseDown;
+            canvas.onmousemove = handleMouseMove;
+            window.onmouseup = handleMouseUp;
+            canvas.onwheel = handleMouseWheel;
+            rect = canvas.getBoundingClientRect();
+        }
+    </script>
+</head>
+
+<body onload="main();">
+    <canvas id="sceneCanvas"></canvas>
+    <p>
+        <label for="vAngle">View Angle :</label>
+        <input type="text" id="vAngle" value="60"><br><br>
+
+        <label for="camOrthoDistance">Rectangular distance</label>
+        <input type="text" id="camOrthoDistance" value="3"><br><br>
+
+        <button id="startBtn">Start</button>
+        <button id="pauseBtn">Pause</button>
+
+        <input type="radio" id="rightArm" name="bodyPart" value="rightArm" checked>
+        <label for="rightArm">Right Hand</label>
+
+        <input type="radio" id="leftArm" name="bodyPart" value="leftArm" checked>
+        <label for="leftArm">Left Hand</label>
+
+        <input type="radio" id="head" name="bodyPart" value="head">
+        <label for="head">Head</label>
+
+        <input type="radio" id="rightLeg" name="bodyPart" value="rightLeg">
+        <label for="rightLeg">Right Leg</label>
+
+        <input type="radio" id="leftLeg" name="bodyPart" value="leftLeg">
+        <label for="leftLeg">Left Leg</label>
+
+
+    </p>
+</body>
+
+</html>
